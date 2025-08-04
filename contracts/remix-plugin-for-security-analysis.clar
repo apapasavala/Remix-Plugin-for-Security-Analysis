@@ -5,8 +5,13 @@
 (define-constant err-invalid-score (err u103))
 (define-constant err-insufficient-balance (err u104))
 (define-constant err-invalid-vulnerability (err u105))
+(define-constant err-bounty-expired (err u107))
+(define-constant err-bounty-not-found (err u108))
+(define-constant err-bounty-already-claimed (err u109))
+(define-constant err-insufficient-bounty-pool (err u110))
 
 (define-data-var next-analysis-id uint u1)
+(define-data-var next-bounty-id uint u1)
 (define-data-var plugin-active bool true)
 (define-data-var analysis-fee uint u1000000)
 
@@ -45,6 +50,39 @@
   (string-ascii 50)
   {pattern-name: (string-ascii 100), risk-level: uint, detection-count: uint})
 
+(define-map security-bounties
+  uint
+  {
+    contract-address: principal,
+    bounty-creator: principal,
+    total-reward: uint,
+    expiry-block: uint,
+    min-severity: (string-ascii 10),
+    status: (string-ascii 15),
+    claimed-by: (optional principal),
+    vulnerabilities-found: uint
+  })
+
+(define-map bounty-claims
+  {bounty-id: uint, claim-index: uint}
+  {
+    claimant: principal,
+    vulnerability-analysis-id: uint,
+    vulnerability-index: uint,
+    reward-amount: uint,
+    claim-timestamp: uint,
+    verified: bool
+  })
+
+(define-map bounty-hunter-stats
+  principal
+  {
+    bounties-claimed: uint,
+    total-rewards-earned: uint,
+    success-rate: uint,
+    reputation-score: uint
+  })
+
 (define-read-only (get-analysis (analysis-id uint))
   (map-get? security-analyses analysis-id))
 
@@ -59,6 +97,30 @@
 
 (define-read-only (get-security-pattern (pattern-id (string-ascii 50)))
   (map-get? security-patterns pattern-id))
+
+(define-read-only (get-bounty (bounty-id uint))
+  (map-get? security-bounties bounty-id))
+
+(define-read-only (get-bounty-claim (bounty-id uint) (claim-index uint))
+  (map-get? bounty-claims {bounty-id: bounty-id, claim-index: claim-index}))
+
+(define-read-only (get-bounty-hunter-stats (hunter principal))
+  (map-get? bounty-hunter-stats hunter))
+
+(define-read-only (calculate-bounty-reward (severity (string-ascii 10)) (base-reward uint))
+  (if (is-eq severity "critical")
+    (* base-reward u4)
+    (if (is-eq severity "high")
+      (* base-reward u2)
+      (if (is-eq severity "medium")
+        base-reward
+        (/ base-reward u2)))))
+
+(define-read-only (is-bounty-active (bounty-id uint))
+  (match (map-get? security-bounties bounty-id)
+    bounty (and (is-eq (get status bounty) "active")
+                (> (get expiry-block bounty) stacks-block-height))
+    false))
 
 (define-read-only (get-plugin-status)
   (var-get plugin-active))
@@ -116,6 +178,29 @@
                   detection-count: (+ (get detection-count pattern) u1)
                 })
       true)))
+
+(define-private (update-bounty-hunter-stats (hunter principal) (reward uint) (success bool))
+  (let ((current-stats (default-to {bounties-claimed: u0, total-rewards-earned: u0, success-rate: u50, reputation-score: u50}
+                                  (map-get? bounty-hunter-stats hunter))))
+    (let ((new-claims (+ (get bounties-claimed current-stats) u1))
+          (new-rewards (+ (get total-rewards-earned current-stats) reward))
+          (new-success-rate (if success 
+                             (if (>= (+ (get success-rate current-stats) u5) u100) 
+                               u100 
+                               (+ (get success-rate current-stats) u5))
+                             (if (<= (get success-rate current-stats) u5) 
+                               u0 
+                               (- (get success-rate current-stats) u5))))
+          (new-reputation (if (>= (+ (get reputation-score current-stats) u2) u100) 
+                           u100 
+                           (+ (get reputation-score current-stats) u2))))
+      (map-set bounty-hunter-stats hunter
+        {
+          bounties-claimed: new-claims,
+          total-rewards-earned: new-rewards,
+          success-rate: new-success-rate,
+          reputation-score: new-reputation
+        }))))
 
 (define-public (register-analyzer (analyzer principal))
   (begin
@@ -218,6 +303,89 @@
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (var-set plugin-active (not (var-get plugin-active)))
     (ok (var-get plugin-active))))
+
+(define-public (create-security-bounty 
+  (contract-address principal)
+  (total-reward uint)
+  (duration-blocks uint)
+  (min-severity (string-ascii 10)))
+  (let ((bounty-id (var-get next-bounty-id))
+        (expiry-block (+ stacks-block-height duration-blocks)))
+    (begin
+      (asserts! (> total-reward u0) err-insufficient-bounty-pool)
+      (asserts! (> duration-blocks u0) (err u111))
+      (asserts! (>= (stx-get-balance tx-sender) total-reward) err-insufficient-balance)
+      
+      (try! (stx-transfer? total-reward tx-sender (as-contract tx-sender)))
+      
+      (map-set security-bounties bounty-id
+        {
+          contract-address: contract-address,
+          bounty-creator: tx-sender,
+          total-reward: total-reward,
+          expiry-block: expiry-block,
+          min-severity: min-severity,
+          status: "active",
+          claimed-by: none,
+          vulnerabilities-found: u0
+        })
+      
+      (var-set next-bounty-id (+ bounty-id u1))
+      (ok bounty-id))))
+
+(define-public (claim-bounty 
+  (bounty-id uint)
+  (analysis-id uint)
+  (vulnerability-index uint))
+  (let ((bounty (unwrap! (map-get? security-bounties bounty-id) err-bounty-not-found))
+        (analysis (unwrap! (map-get? security-analyses analysis-id) err-not-found))
+        (vulnerability (unwrap! (map-get? contract-vulnerabilities {analysis-id: analysis-id, vuln-index: vulnerability-index}) err-not-found)))
+    (begin
+      (asserts! (is-bounty-active bounty-id) err-bounty-expired)
+      (asserts! (is-eq (get contract-address bounty) (get contract-address analysis)) (err u112))
+      (asserts! (is-eq tx-sender (get analyzer analysis)) err-owner-only)
+      
+      (let ((severity (get severity vulnerability))
+            (base-reward (/ (get total-reward bounty) u10))
+            (reward-amount (calculate-bounty-reward severity base-reward))
+            (claim-index (get vulnerabilities-found bounty)))
+        
+        (asserts! (>= (as-contract (stx-get-balance tx-sender)) reward-amount) err-insufficient-bounty-pool)
+        
+        (try! (as-contract (stx-transfer? reward-amount tx-sender (get analyzer analysis))))
+        
+        (map-set bounty-claims {bounty-id: bounty-id, claim-index: claim-index}
+          {
+            claimant: tx-sender,
+            vulnerability-analysis-id: analysis-id,
+            vulnerability-index: vulnerability-index,
+            reward-amount: reward-amount,
+            claim-timestamp: stacks-block-height,
+            verified: true
+          })
+        
+        (map-set security-bounties bounty-id
+          (merge bounty {vulnerabilities-found: (+ (get vulnerabilities-found bounty) u1)}))
+        
+        (update-bounty-hunter-stats tx-sender reward-amount true)
+        (ok reward-amount)))))
+
+(define-public (expire-bounty (bounty-id uint))
+  (let ((bounty (unwrap! (map-get? security-bounties bounty-id) err-bounty-not-found)))
+    (begin
+      (asserts! (is-eq tx-sender (get bounty-creator bounty)) err-owner-only)
+      (asserts! (<= (get expiry-block bounty) stacks-block-height) (err u113))
+      
+      (let ((remaining-reward (- (get total-reward bounty) 
+                                (* (get vulnerabilities-found bounty) 
+                                   (/ (get total-reward bounty) u10)))))
+        (if (> remaining-reward u0)
+          (try! (as-contract (stx-transfer? remaining-reward tx-sender (get bounty-creator bounty))))
+          true))
+      
+      (map-set security-bounties bounty-id
+        (merge bounty {status: "expired"}))
+      (ok true))))
 
 (define-public (batch-add-vulnerabilities 
   (analysis-id uint)  

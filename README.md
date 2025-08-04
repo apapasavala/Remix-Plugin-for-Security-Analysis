@@ -25,6 +25,13 @@ This MVP demonstrates how IDE plugins can integrate with blockchain smart contra
 - **Fee Management**: Configurable analysis fees with STX token payments
 - **Plugin Controls**: Admin controls for plugin activation/deactivation
 
+### 🎯 Security Bounty System
+- **Bounty Creation**: Contract owners can post STX rewards for vulnerability discovery
+- **Competitive Analysis**: Multiple security researchers can compete for bounties
+- **Performance-Based Rewards**: Dynamic payouts based on vulnerability severity (4x for critical, 2x for high)
+- **Reputation Tracking**: Bounty hunter success rates and lifetime earnings
+- **Time-Based Expiration**: Automatic bounty expiration with fund recovery
+
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
@@ -94,6 +101,35 @@ clarinet deploy --testnet
 (contract-call? .remix-plugin-for-security-analysis get-user-history 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
 ```
 
+### 🎯 Bounty System Operations
+
+#### Create Security Bounty
+```clarity
+(contract-call? .remix-plugin-for-security-analysis create-security-bounty
+  'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM  ;; target contract
+  u10000000                                     ;; total reward (10 STX)
+  u1000                                         ;; duration (1000 blocks)
+  "medium")                                     ;; minimum severity
+```
+
+#### Claim Bounty
+```clarity
+(contract-call? .remix-plugin-for-security-analysis claim-bounty
+  u1                                            ;; bounty ID
+  u1                                            ;; analysis ID
+  u1)                                           ;; vulnerability index
+```
+
+#### Check Bounty Status
+```clarity
+(contract-call? .remix-plugin-for-security-analysis get-bounty u1)
+```
+
+#### View Bounty Hunter Stats
+```clarity
+(contract-call? .remix-plugin-for-security-analysis get-bounty-hunter-stats 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
+```
+
 ## 🏗️ Architecture
 
 ### 📁 Contract Structure
@@ -101,6 +137,8 @@ clarinet deploy --testnet
 - **Vulnerability Tracking**: Detailed vulnerability information
 - **User Management**: Analyzer credentials and user history
 - **Security Patterns**: Common vulnerability pattern database
+- **Bounty System**: Security bounty tracking and reward distribution
+- **Reputation System**: Bounty hunter performance and reward history
 
 ### 🔄 Workflow
 1. **Register Analyzer** → Gain certification to perform analyses
@@ -130,12 +168,18 @@ clarinet check
 - `complete-analysis`: Mark analysis as completed
 - `register-analyzer`: Register new security analyzer
 - `add-security-pattern`: Add new security pattern
+- `create-security-bounty`: Post bounty for vulnerability discovery
+- `claim-bounty`: Claim reward for finding vulnerabilities
+- `expire-bounty`: Expire bounty and recover remaining funds
 
 ### Read-Only Functions
 - `get-analysis`: Retrieve analysis by ID
 - `get-vulnerability`: Get specific vulnerability details
 - `get-user-history`: View user's analysis history
 - `calculate-overall-security-score`: Calculate composite security score
+- `get-bounty`: Retrieve bounty details and status
+- `get-bounty-hunter-stats`: View bounty hunter performance metrics
+- `calculate-bounty-reward`: Calculate reward based on vulnerability severity
 
 ## 🔐 Security Considerations
 
