@@ -9,9 +9,16 @@
 (define-constant err-bounty-not-found (err u108))
 (define-constant err-bounty-already-claimed (err u109))
 (define-constant err-insufficient-bounty-pool (err u110))
+(define-constant err-policy-expired (err u114))
+(define-constant err-policy-not-found (err u115))
+(define-constant err-insufficient-coverage (err u116))
+(define-constant err-claim-already-processed (err u117))
+(define-constant err-invalid-claim (err u118))
 
 (define-data-var next-analysis-id uint u1)
 (define-data-var next-bounty-id uint u1)
+(define-data-var next-policy-id uint u1)
+(define-data-var total-insurance-pool uint u0)
 (define-data-var plugin-active bool true)
 (define-data-var analysis-fee uint u1000000)
 
@@ -83,6 +90,51 @@
     reputation-score: uint
   })
 
+(define-map insurance-policies
+  uint
+  {
+    contract-address: principal,
+    policy-holder: principal,
+    coverage-amount: uint,
+    premium-paid: uint,
+    start-block: uint,
+    end-block: uint,
+    security-score-at-purchase: uint,
+    status: (string-ascii 15),
+    claims-made: uint
+  })
+
+(define-map insurance-claims
+  {policy-id: uint, claim-index: uint}
+  {
+    claimant: principal,
+    claim-amount: uint,
+    vulnerability-evidence: uint,
+    claim-timestamp: uint,
+    status: (string-ascii 15),
+    payout-amount: uint
+  })
+
+(define-map liquidity-providers
+  principal
+  {
+    total-provided: uint,
+    current-stake: uint,
+    rewards-earned: uint,
+    risk-score: uint,
+    join-timestamp: uint
+  })
+
+(define-map pool-stats
+  uint
+  {
+    total-liquidity: uint,
+    total-policies: uint,
+    total-claims-paid: uint,
+    pool-utilization: uint,
+    last-updated: uint
+  })
+
 (define-read-only (get-analysis (analysis-id uint))
   (map-get? security-analyses analysis-id))
 
@@ -120,6 +172,35 @@
   (match (map-get? security-bounties bounty-id)
     bounty (and (is-eq (get status bounty) "active")
                 (> (get expiry-block bounty) stacks-block-height))
+    false))
+
+(define-read-only (get-insurance-policy (policy-id uint))
+  (map-get? insurance-policies policy-id))
+
+(define-read-only (get-insurance-claim (policy-id uint) (claim-index uint))
+  (map-get? insurance-claims {policy-id: policy-id, claim-index: claim-index}))
+
+(define-read-only (get-liquidity-provider (provider principal))
+  (map-get? liquidity-providers provider))
+
+(define-read-only (get-pool-stats (pool-id uint))
+  (map-get? pool-stats pool-id))
+
+(define-read-only (calculate-insurance-premium (coverage-amount uint) (security-score uint) (duration-blocks uint))
+  (let ((base-rate (if (>= security-score u80) u100 
+                    (if (>= security-score u60) u200
+                     (if (>= security-score u40) u400 u800))))
+        (time-factor (/ duration-blocks u1000))
+        (coverage-factor (/ coverage-amount u1000000)))
+    (* (* base-rate time-factor) coverage-factor)))
+
+(define-read-only (get-total-insurance-pool)
+  (var-get total-insurance-pool))
+
+(define-read-only (is-policy-active (policy-id uint))
+  (match (map-get? insurance-policies policy-id)
+    policy (and (is-eq (get status policy) "active")
+                (> (get end-block policy) stacks-block-height))
     false))
 
 (define-read-only (get-plugin-status)
@@ -201,6 +282,32 @@
           success-rate: new-success-rate,
           reputation-score: new-reputation
         }))))
+
+(define-private (update-liquidity-provider-rewards (provider principal) (reward-amount uint))
+  (let ((current-provider (default-to {total-provided: u0, current-stake: u0, rewards-earned: u0, risk-score: u50, join-timestamp: stacks-block-height}
+                                     (map-get? liquidity-providers provider))))
+    (map-set liquidity-providers provider
+      {
+        total-provided: (get total-provided current-provider),
+        current-stake: (get current-stake current-provider),
+        rewards-earned: (+ (get rewards-earned current-provider) reward-amount),
+        risk-score: (get risk-score current-provider),
+        join-timestamp: (get join-timestamp current-provider)
+      })))
+
+(define-private (update-pool-statistics (pool-id uint) (new-policy bool) (claim-payout uint))
+  (let ((current-stats (default-to {total-liquidity: u0, total-policies: u0, total-claims-paid: u0, pool-utilization: u0, last-updated: stacks-block-height}
+                                  (map-get? pool-stats pool-id))))
+    (map-set pool-stats pool-id
+      {
+        total-liquidity: (var-get total-insurance-pool),
+        total-policies: (if new-policy (+ (get total-policies current-stats) u1) (get total-policies current-stats)),
+        total-claims-paid: (+ (get total-claims-paid current-stats) claim-payout),
+        pool-utilization: (if (> (var-get total-insurance-pool) u0) 
+                           (/ (* (get total-policies current-stats) u100) (var-get total-insurance-pool)) 
+                           u0),
+        last-updated: stacks-block-height
+      })))
 
 (define-public (register-analyzer (analyzer principal))
   (begin
@@ -386,6 +493,117 @@
       (map-set security-bounties bounty-id
         (merge bounty {status: "expired"}))
       (ok true))))
+
+(define-public (provide-liquidity (amount uint))
+  (let ((provider-stats (default-to {total-provided: u0, current-stake: u0, rewards-earned: u0, risk-score: u50, join-timestamp: stacks-block-height}
+                                   (map-get? liquidity-providers tx-sender))))
+    (begin
+      (asserts! (> amount u0) err-insufficient-balance)
+      (asserts! (>= (stx-get-balance tx-sender) amount) err-insufficient-balance)
+      
+      (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+      (var-set total-insurance-pool (+ (var-get total-insurance-pool) amount))
+      
+      (map-set liquidity-providers tx-sender
+        {
+          total-provided: (+ (get total-provided provider-stats) amount),
+          current-stake: (+ (get current-stake provider-stats) amount),
+          rewards-earned: (get rewards-earned provider-stats),
+          risk-score: (get risk-score provider-stats),
+          join-timestamp: (get join-timestamp provider-stats)
+        })
+      
+      (update-pool-statistics u0 false u0)
+      (ok amount))))
+
+(define-public (purchase-insurance 
+  (contract-address principal)
+  (coverage-amount uint)
+  (duration-blocks uint)
+  (security-score uint))
+  (let ((policy-id (var-get next-policy-id))
+        (premium (calculate-insurance-premium coverage-amount security-score duration-blocks))
+        (end-block (+ stacks-block-height duration-blocks)))
+    (begin
+      (asserts! (> coverage-amount u0) err-insufficient-coverage)
+      (asserts! (> duration-blocks u0) (err u119))
+      (asserts! (>= (stx-get-balance tx-sender) premium) err-insufficient-balance)
+      (asserts! (<= coverage-amount (var-get total-insurance-pool)) err-insufficient-coverage)
+      
+      (try! (stx-transfer? premium tx-sender (as-contract tx-sender)))
+      
+      (map-set insurance-policies policy-id
+        {
+          contract-address: contract-address,
+          policy-holder: tx-sender,
+          coverage-amount: coverage-amount,
+          premium-paid: premium,
+          start-block: stacks-block-height,
+          end-block: end-block,
+          security-score-at-purchase: security-score,
+          status: "active",
+          claims-made: u0
+        })
+      
+      (var-set next-policy-id (+ policy-id u1))
+      (update-pool-statistics u0 true u0)
+      (ok policy-id))))
+
+(define-public (file-insurance-claim 
+  (policy-id uint)
+  (claim-amount uint)
+  (vulnerability-evidence uint))
+  (let ((policy (unwrap! (map-get? insurance-policies policy-id) err-policy-not-found))
+        (claim-index (get claims-made policy)))
+    (begin
+      (asserts! (is-policy-active policy-id) err-policy-expired)
+      (asserts! (is-eq tx-sender (get policy-holder policy)) err-owner-only)
+      (asserts! (<= claim-amount (get coverage-amount policy)) err-insufficient-coverage)
+      (asserts! (> vulnerability-evidence u0) err-invalid-claim)
+      
+      (map-set insurance-claims {policy-id: policy-id, claim-index: claim-index}
+        {
+          claimant: tx-sender,
+          claim-amount: claim-amount,
+          vulnerability-evidence: vulnerability-evidence,
+          claim-timestamp: stacks-block-height,
+          status: "pending",
+          payout-amount: u0
+        })
+      
+      (map-set insurance-policies policy-id
+        (merge policy {claims-made: (+ claim-index u1)}))
+      
+      (ok claim-index))))
+
+(define-public (process-insurance-claim 
+  (policy-id uint)
+  (claim-index uint)
+  (approved bool)
+  (payout-amount uint))
+  (let ((policy (unwrap! (map-get? insurance-policies policy-id) err-policy-not-found))
+        (claim (unwrap! (map-get? insurance-claims {policy-id: policy-id, claim-index: claim-index}) (err u120))))
+    (begin
+      (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+      (asserts! (is-eq (get status claim) "pending") err-claim-already-processed)
+      
+      (if approved
+        (begin
+          (asserts! (<= payout-amount (get claim-amount claim)) err-insufficient-coverage)
+          (asserts! (<= payout-amount (var-get total-insurance-pool)) err-insufficient-coverage)
+          
+          (try! (as-contract (stx-transfer? payout-amount tx-sender (get claimant claim))))
+          (var-set total-insurance-pool (- (var-get total-insurance-pool) payout-amount))
+          
+          (map-set insurance-claims {policy-id: policy-id, claim-index: claim-index}
+            (merge claim {status: "approved", payout-amount: payout-amount}))
+          
+          (update-pool-statistics u0 false payout-amount)
+          (ok payout-amount))
+        (begin
+          (map-set insurance-claims {policy-id: policy-id, claim-index: claim-index}
+            (merge claim {status: "rejected", payout-amount: u0}))
+          (ok u0))))))
 
 (define-public (batch-add-vulnerabilities 
   (analysis-id uint)  

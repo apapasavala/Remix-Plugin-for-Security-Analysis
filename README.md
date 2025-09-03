@@ -32,6 +32,13 @@ This MVP demonstrates how IDE plugins can integrate with blockchain smart contra
 - **Reputation Tracking**: Bounty hunter success rates and lifetime earnings
 - **Time-Based Expiration**: Automatic bounty expiration with fund recovery
 
+### 🛡️ Security Insurance Pool
+- **DeFi Insurance**: Decentralized insurance marketplace for smart contract security risks
+- **Liquidity Provision**: Earn yield by providing STX liquidity to insurance pools
+- **Risk-Based Premiums**: Premium calculations based on security scores and coverage duration
+- **Automated Claims**: Streamlined claim filing and processing system
+- **Pool Management**: Real-time pool statistics and utilization tracking
+
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
@@ -130,6 +137,40 @@ clarinet deploy --testnet
 (contract-call? .remix-plugin-for-security-analysis get-bounty-hunter-stats 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
 ```
 
+### 🛡️ Insurance System Operations
+
+#### Provide Liquidity
+```clarity
+(contract-call? .remix-plugin-for-security-analysis provide-liquidity u5000000) ;; 5 STX
+```
+
+#### Purchase Insurance
+```clarity
+(contract-call? .remix-plugin-for-security-analysis purchase-insurance
+  'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM  ;; contract to insure
+  u2000000                                     ;; coverage amount (2 STX)
+  u2000                                        ;; duration (2000 blocks)
+  u85)                                         ;; security score
+```
+
+#### File Insurance Claim
+```clarity
+(contract-call? .remix-plugin-for-security-analysis file-insurance-claim
+  u1                                           ;; policy ID
+  u1000000                                     ;; claim amount (1 STX)
+  u1)                                          ;; vulnerability evidence ID
+```
+
+#### Check Policy Status
+```clarity
+(contract-call? .remix-plugin-for-security-analysis get-insurance-policy u1)
+```
+
+#### View Pool Statistics
+```clarity
+(contract-call? .remix-plugin-for-security-analysis get-pool-stats u0)
+```
+
 ## 🏗️ Architecture
 
 ### 📁 Contract Structure
@@ -139,6 +180,8 @@ clarinet deploy --testnet
 - **Security Patterns**: Common vulnerability pattern database
 - **Bounty System**: Security bounty tracking and reward distribution
 - **Reputation System**: Bounty hunter performance and reward history
+- **Insurance Pool**: DeFi-style insurance marketplace with liquidity provision
+- **Claims Management**: Automated insurance claim processing and payouts
 
 ### 🔄 Workflow
 1. **Register Analyzer** → Gain certification to perform analyses
@@ -171,6 +214,10 @@ clarinet check
 - `create-security-bounty`: Post bounty for vulnerability discovery
 - `claim-bounty`: Claim reward for finding vulnerabilities
 - `expire-bounty`: Expire bounty and recover remaining funds
+- `provide-liquidity`: Add STX to insurance pool for yield
+- `purchase-insurance`: Buy insurance coverage for contracts
+- `file-insurance-claim`: File claim for security incident
+- `process-insurance-claim`: Process and approve/reject claims
 
 ### Read-Only Functions
 - `get-analysis`: Retrieve analysis by ID
@@ -180,6 +227,10 @@ clarinet check
 - `get-bounty`: Retrieve bounty details and status
 - `get-bounty-hunter-stats`: View bounty hunter performance metrics
 - `calculate-bounty-reward`: Calculate reward based on vulnerability severity
+- `get-insurance-policy`: View policy details and coverage
+- `get-liquidity-provider`: Check liquidity provider statistics
+- `calculate-insurance-premium`: Calculate premium for coverage
+- `get-total-insurance-pool`: View total pool liquidity
 
 ## 🔐 Security Considerations
 
