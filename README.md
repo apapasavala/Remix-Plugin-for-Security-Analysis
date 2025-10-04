@@ -39,6 +39,13 @@ This MVP demonstrates how IDE plugins can integrate with blockchain smart contra
 - **Automated Claims**: Streamlined claim filing and processing system
 - **Pool Management**: Real-time pool statistics and utilization tracking
 
+### 🏅 Security Badge NFT System
+- **Tokenized Security**: Transform security analysis into tradeable NFT badges
+- **Tier-Based Badges**: Platinum (90+), Gold (75+), Silver (60+), Bronze (50+) classifications
+- **DeFi Composability**: NFT badges integrate with lending, DEXs, and other protocols
+- **NFT Marketplace**: Built-in marketplace for buying/selling security credentials
+- **Time-Decay Mechanics**: Badges expire and require renewal for continuous validity
+
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
@@ -171,6 +178,44 @@ clarinet deploy --testnet
 (contract-call? .remix-plugin-for-security-analysis get-pool-stats u0)
 ```
 
+### 🏅 NFT Badge Operations
+
+#### Mint Security Badge
+```clarity
+(contract-call? .remix-plugin-for-security-analysis mint-security-badge
+  u1                                               ;; analysis ID
+  u10000)                                          ;; validity (blocks)
+```
+
+#### Transfer Badge
+```clarity
+(contract-call? .remix-plugin-for-security-analysis transfer-security-badge
+  u1                                               ;; badge ID
+  'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)      ;; recipient
+```
+
+#### List Badge for Sale
+```clarity
+(contract-call? .remix-plugin-for-security-analysis list-badge-for-sale
+  u1                                               ;; badge ID
+  u5000000)                                        ;; price (5 STX)
+```
+
+#### Buy Badge from Marketplace
+```clarity
+(contract-call? .remix-plugin-for-security-analysis buy-badge-from-marketplace u1)
+```
+
+#### Check Badge Details
+```clarity
+(contract-call? .remix-plugin-for-security-analysis get-security-badge u1)
+```
+
+#### View Badge Statistics
+```clarity
+(contract-call? .remix-plugin-for-security-analysis get-badge-statistics u0)
+```
+
 ## 🏗️ Architecture
 
 ### 📁 Contract Structure
@@ -182,6 +227,8 @@ clarinet deploy --testnet
 - **Reputation System**: Bounty hunter performance and reward history
 - **Insurance Pool**: DeFi-style insurance marketplace with liquidity provision
 - **Claims Management**: Automated insurance claim processing and payouts
+- **NFT Badge System**: Tokenized security credentials with marketplace
+- **Badge Ownership**: Track and transfer security NFTs across users
 
 ### 🔄 Workflow
 1. **Register Analyzer** → Gain certification to perform analyses
@@ -218,6 +265,10 @@ clarinet check
 - `purchase-insurance`: Buy insurance coverage for contracts
 - `file-insurance-claim`: File claim for security incident
 - `process-insurance-claim`: Process and approve/reject claims
+- `mint-security-badge`: Create NFT badge from completed analysis
+- `transfer-security-badge`: Transfer badge ownership
+- `list-badge-for-sale`: List badge on marketplace
+- `buy-badge-from-marketplace`: Purchase listed badges
 
 ### Read-Only Functions
 - `get-analysis`: Retrieve analysis by ID
@@ -231,6 +282,10 @@ clarinet check
 - `get-liquidity-provider`: Check liquidity provider statistics
 - `calculate-insurance-premium`: Calculate premium for coverage
 - `get-total-insurance-pool`: View total pool liquidity
+- `get-security-badge`: View NFT badge details and metadata
+- `get-badge-ownership`: List all badges owned by address
+- `calculate-badge-tier`: Determine badge tier from security score
+- `is-badge-active`: Check if badge is currently valid
 
 ## 🔐 Security Considerations
 

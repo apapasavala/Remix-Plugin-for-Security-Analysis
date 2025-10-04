@@ -14,10 +14,16 @@
 (define-constant err-insufficient-coverage (err u116))
 (define-constant err-claim-already-processed (err u117))
 (define-constant err-invalid-claim (err u118))
+(define-constant err-badge-expired (err u121))
+(define-constant err-badge-not-found (err u122))
+(define-constant err-not-badge-owner (err u123))
+(define-constant err-badge-already-minted (err u124))
+(define-constant err-insufficient-score (err u125))
 
 (define-data-var next-analysis-id uint u1)
 (define-data-var next-bounty-id uint u1)
 (define-data-var next-policy-id uint u1)
+(define-data-var next-badge-id uint u1)
 (define-data-var total-insurance-pool uint u0)
 (define-data-var plugin-active bool true)
 (define-data-var analysis-fee uint u1000000)
@@ -135,6 +141,45 @@
     last-updated: uint
   })
 
+(define-map security-badge-nfts
+  uint
+  {
+    contract-address: principal,
+    badge-owner: principal,
+    security-score: uint,
+    badge-tier: (string-ascii 10),
+    analysis-id: uint,
+    mint-timestamp: uint,
+    expiry-block: uint,
+    is-active: bool,
+    transfer-count: uint
+  })
+
+(define-map badge-ownership
+  principal
+  (list 20 uint))
+
+(define-map badge-marketplace
+  uint
+  {
+    listed-price: uint,
+    is-listed: bool,
+    seller: principal,
+    list-timestamp: uint
+  })
+
+(define-map badge-statistics
+  uint
+  {
+    total-badges-minted: uint,
+    platinum-count: uint,
+    gold-count: uint,
+    silver-count: uint,
+    bronze-count: uint,
+    total-transfers: uint,
+    total-marketplace-volume: uint
+  })
+
 (define-read-only (get-analysis (analysis-id uint))
   (map-get? security-analyses analysis-id))
 
@@ -202,6 +247,42 @@
     policy (and (is-eq (get status policy) "active")
                 (> (get end-block policy) stacks-block-height))
     false))
+
+(define-read-only (get-security-badge (badge-id uint))
+  (map-get? security-badge-nfts badge-id))
+
+(define-read-only (get-badge-ownership (owner principal))
+  (default-to (list) (map-get? badge-ownership owner)))
+
+(define-read-only (get-badge-marketplace-listing (badge-id uint))
+  (map-get? badge-marketplace badge-id))
+
+(define-read-only (get-badge-statistics (stat-id uint))
+  (map-get? badge-statistics stat-id))
+
+(define-read-only (calculate-badge-tier (security-score uint))
+  (if (>= security-score u90)
+    "platinum"
+    (if (>= security-score u75)
+      "gold"
+      (if (>= security-score u60)
+        "silver"
+        "bronze"))))
+
+(define-read-only (is-badge-active (badge-id uint))
+  (match (map-get? security-badge-nfts badge-id)
+    badge (and (get is-active badge)
+               (> (get expiry-block badge) stacks-block-height))
+    false))
+
+(define-read-only (get-badge-value-multiplier (badge-tier (string-ascii 10)))
+  (if (is-eq badge-tier "platinum")
+    u4
+    (if (is-eq badge-tier "gold")
+      u3
+      (if (is-eq badge-tier "silver")
+        u2
+        u1))))
 
 (define-read-only (get-plugin-status)
   (var-get plugin-active))
@@ -307,6 +388,20 @@
                            (/ (* (get total-policies current-stats) u100) (var-get total-insurance-pool)) 
                            u0),
         last-updated: stacks-block-height
+      })))
+
+(define-private (update-badge-statistics (tier (string-ascii 10)) (increment bool))
+  (let ((current-stats (default-to {total-badges-minted: u0, platinum-count: u0, gold-count: u0, silver-count: u0, bronze-count: u0, total-transfers: u0, total-marketplace-volume: u0}
+                                  (map-get? badge-statistics u0))))
+    (map-set badge-statistics u0
+      {
+        total-badges-minted: (if increment (+ (get total-badges-minted current-stats) u1) (get total-badges-minted current-stats)),
+        platinum-count: (if (and increment (is-eq tier "platinum")) (+ (get platinum-count current-stats) u1) (get platinum-count current-stats)),
+        gold-count: (if (and increment (is-eq tier "gold")) (+ (get gold-count current-stats) u1) (get gold-count current-stats)),
+        silver-count: (if (and increment (is-eq tier "silver")) (+ (get silver-count current-stats) u1) (get silver-count current-stats)),
+        bronze-count: (if (and increment (is-eq tier "bronze")) (+ (get bronze-count current-stats) u1) (get bronze-count current-stats)),
+        total-transfers: (get total-transfers current-stats),
+        total-marketplace-volume: (get total-marketplace-volume current-stats)
       })))
 
 (define-public (register-analyzer (analyzer principal))
@@ -604,6 +699,88 @@
           (map-set insurance-claims {policy-id: policy-id, claim-index: claim-index}
             (merge claim {status: "rejected", payout-amount: u0}))
           (ok u0))))))
+
+(define-public (mint-security-badge (analysis-id uint) (validity-blocks uint))
+  (let ((analysis (unwrap! (map-get? security-analyses analysis-id) err-not-found))
+        (badge-id (var-get next-badge-id))
+        (security-score (get security-score analysis))
+        (badge-tier (calculate-badge-tier security-score))
+        (expiry-block (+ stacks-block-height validity-blocks)))
+    (begin
+      (asserts! (>= security-score u50) err-insufficient-score)
+      (asserts! (is-eq (get status analysis) "completed") (err u126))
+      (asserts! (is-eq tx-sender (get contract-address analysis)) err-not-badge-owner)
+      
+      (map-set security-badge-nfts badge-id
+        {
+          contract-address: (get contract-address analysis),
+          badge-owner: tx-sender,
+          security-score: security-score,
+          badge-tier: badge-tier,
+          analysis-id: analysis-id,
+          mint-timestamp: stacks-block-height,
+          expiry-block: expiry-block,
+          is-active: true,
+          transfer-count: u0
+        })
+      
+      (let ((current-badges (get-badge-ownership tx-sender)))
+        (map-set badge-ownership tx-sender (unwrap-panic (as-max-len? (append current-badges badge-id) u20))))
+      
+      (update-badge-statistics badge-tier true)
+      (var-set next-badge-id (+ badge-id u1))
+      (ok badge-id))))
+
+(define-public (transfer-security-badge (badge-id uint) (recipient principal))
+  (let ((badge (unwrap! (map-get? security-badge-nfts badge-id) err-badge-not-found)))
+    (begin
+      (asserts! (is-eq tx-sender (get badge-owner badge)) err-not-badge-owner)
+      (asserts! (is-badge-active badge-id) err-badge-expired)
+      
+      (map-set security-badge-nfts badge-id
+        (merge badge {
+          badge-owner: recipient,
+          transfer-count: (+ (get transfer-count badge) u1)
+        }))
+      
+      (ok true))))
+
+(define-public (list-badge-for-sale (badge-id uint) (price uint))
+  (let ((badge (unwrap! (map-get? security-badge-nfts badge-id) err-badge-not-found)))
+    (begin
+      (asserts! (is-eq tx-sender (get badge-owner badge)) err-not-badge-owner)
+      (asserts! (is-badge-active badge-id) err-badge-expired)
+      (asserts! (> price u0) err-insufficient-balance)
+      
+      (map-set badge-marketplace badge-id
+        {
+          listed-price: price,
+          is-listed: true,
+          seller: tx-sender,
+          list-timestamp: stacks-block-height
+        })
+      (ok true))))
+
+(define-public (buy-badge-from-marketplace (badge-id uint))
+  (let ((badge (unwrap! (map-get? security-badge-nfts badge-id) err-badge-not-found))
+        (listing (unwrap! (map-get? badge-marketplace badge-id) (err u127))))
+    (begin
+      (asserts! (get is-listed listing) (err u128))
+      (asserts! (is-badge-active badge-id) err-badge-expired)
+      (asserts! (>= (stx-get-balance tx-sender) (get listed-price listing)) err-insufficient-balance)
+      
+      (try! (stx-transfer? (get listed-price listing) tx-sender (get seller listing)))
+      
+      (map-set security-badge-nfts badge-id
+        (merge badge {
+          badge-owner: tx-sender,
+          transfer-count: (+ (get transfer-count badge) u1)
+        }))
+      
+      (map-set badge-marketplace badge-id
+        (merge listing {is-listed: false}))
+      
+      (ok badge-id))))
 
 (define-public (batch-add-vulnerabilities 
   (analysis-id uint)  
