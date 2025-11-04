@@ -1,4 +1,44 @@
 (define-constant contract-owner tx-sender)
+(define-constant ERR_UNAUTHORIZED u100)
+(define-constant ERR_NO_PROPOSAL u101)
+
+(define-data-var contract-admin principal contract-owner)
+(define-data-var pending-admin (optional principal) none)
+
+(define-read-only (get-contract-admin)
+  (var-get contract-admin)
+)
+
+(define-read-only (get-pending-admin)
+  (var-get pending-admin)
+)
+
+(define-read-only (is-admin (who principal))
+  (is-eq who (var-get contract-admin))
+)
+
+(define-public (propose-admin (new-admin principal))
+  (if (is-eq tx-sender (var-get contract-admin))
+      (begin
+        (var-set pending-admin (some new-admin))
+        (ok true)
+      )
+      (err ERR_UNAUTHORIZED)
+  )
+)
+
+(define-public (accept-admin)
+  (let ((p (unwrap! (var-get pending-admin) (err ERR_NO_PROPOSAL))))
+    (if (is-eq tx-sender p)
+        (begin
+          (var-set contract-admin p)
+          (var-set pending-admin none)
+          (ok true)
+        )
+        (err ERR_UNAUTHORIZED)
+    )
+  )
+)
 (define-constant err-owner-only (err u100))
 (define-constant err-not-found (err u101))
 (define-constant err-already-exists (err u102))
